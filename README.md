@@ -22,7 +22,9 @@ There are 3,680 training images across 37 classes, so roughly 99 photos per bree
 
 Freezing keeps the feature extractor exactly as ImageNet left it, so the only thing I'm training is the mapping from those 512 features onto 37 labels. That's a much smaller problem, and 3,300 images is enough to constrain it.
 
-Two side benefits I didn't expect going in. The backward pass is much faster, because gradients only have to reach one layer instead of propagating through all 18. And it's more stable: a randomly-initialised `fc` produces large, meaningless gradients in the first few batches, and if the rest of the network were unfrozen, those would flow back and damage weights that took 1.2 million images to learn.
+Two side benefits I didn't expect going in. The backward pass is much faster, and I had the reason wrong at first: I assumed gradients were travelling a shorter distance. That's not what happens. Since every backbone parameter has `requires_grad = False` and the input doesn't require grad either, autograd never records a graph for those layers during the forward pass, so there's nothing there for backward to traverse. It computes gradients for `fc`'s 18,981 parameters and stops. It saves memory too, because the intermediate activations that backward would otherwise have to keep around are never stored.
+
+The second benefit is stability: a randomly-initialised `fc` produces large, meaningless gradients in the first few batches, and if the rest of the network were unfrozen, those would flow back and damage weights that took 1.2 million images to learn.
 
 ## Setup
 
@@ -47,7 +49,19 @@ I then split `trainval` again into 3,300 for training and 380 for validation, wi
 
 A consequence that doubles as a sanity check: after `ToTensor()` pixels run 0 to 1, but after normalizing they run roughly -2.12 to 2.64, since `(0 - 0.485) / 0.229 = -2.12` and `(1 - 0.406) / 0.225 = 2.64`. If a tensor still tops out at 1.0, the normalize step didn't happen.
 
-**`num_workers=4` and the `__main__` guard.** The guard is mandatory here, and leaving it out crashes the script. Workers are separate processes, and on macOS a new process re-imports the script from the top to get its definitions. Without the guard, each worker would reach the `DataLoader` line and try to spawn four workers of its own, and Python stops it with a bootstrapping error. Everything that runs goes under `if __name__ == "__main__":` for that reason.
+**`num_workers=4` and the `__main__` guard.** The guard is mandatory here, and I found that out by leaving it off. Workers are separate processes, and on macOS a new process re-imports the script from the top to get its definitions. Without the guard, each worker reaches the `DataLoader` line and tries to spawn four workers of its own. Python catches this and stops:
+
+```
+RuntimeError:
+        An attempt has been made to start a new process before the
+        current process has finished its bootstrapping phase.
+
+        This probably means that you are not using fork to start your
+        child processes and you have forgotten to use the proper idiom
+        in the main module.
+```
+
+It took me a while to connect that message to `num_workers`, since nothing in it mentions the DataLoader. Everything that runs goes under `if __name__ == "__main__":` for that reason. Setting `num_workers=0` also makes it go away, which is a tempting fix and the wrong one.
 
 What the workers actually do is prepare batches: open the JPEG, decode it, resize to 224x224, normalize, and stack 32 of them into one `[32, 3, 224, 224]` tensor. With `num_workers=0` that happens between training steps, so the GPU sits idle waiting for it. With 4, batches are being prepared while the model trains on the previous one. At 224x224 the decode-and-resize is genuinely expensive, so this matters here in a way it wouldn't on small images.
 
@@ -72,22 +86,31 @@ Nothing differs between these two runs except the random initialisation of `fc` 
 
 The dip in run 1 is 1.3 points, which on a 380-image validation set works out to about five images changing their minds. Five images is a small enough difference that I doubt anything real is happening there, even though the curve looks like it is.
 
-With 380 validation images the standard error on an accuracy near 85% is about 1.8 points, so call it ±2. Any improvement smaller than that isn't measurable with this setup, and I should be suspicious of my own explanations for wiggles in the curve.
+With 380 validation images the standard error on an accuracy near 85% is `sqrt(0.85 * 0.15 / 380)` = 1.8 percentage points. I want to be careful about that number, because one standard error is only about a 68% interval, and quoting it as though it were the threshold for a real result is exactly the mistake this section is warning about. The 95% interval is roughly twice as wide, ±3.6 points, and that's the figure to use when deciding whether a change did anything.
 
-For context, a paper on this dataset (arXiv 2602.07534) reports VGG16 at 60.85%, ResNet50 at 71.39%, InceptionV3 at 84.94%, fine-tuned Xception at 88.8%, and GCViT-Tiny at 92.00%. So a frozen network with a 19k-parameter classifier on top lands in the same range as fully fine-tuned CNNs, which surprised me. The caveat is real though: those are test-set numbers and mine is a validation split I made myself, so it isn't a clean comparison and I shouldn't present it as one.
+So the 1.8 point gap between my two runs is one standard error. It's inside the range I'd get from reshuffling alone, and it would be wrong to read it as one run being better.
+
+One more caveat on that interval. ±3.6 is the uncertainty on a single accuracy against the true value. Comparing my two runs is a paired comparison, since both were scored on the same 380 images, and the correct test is McNemar's, which needs the count of images the two runs disagreed on. I didn't record that, so I can't run it. The paired test would give a tighter bound than the unpaired one, so ±3.6 is the conservative answer rather than the exact one.
+
+For rough context, a 2026 paper (arXiv 2602.07534, Hera et al., "Fine-Grained Cat Breed Recognition with Global Context Vision Transformer", ICCIT 2025) reports 92.00% test accuracy with a GCViT-Tiny on this dataset. Their task is only the 12 cat breeds though, so it's a 12-way problem and my 37-way number doesn't line up against it. The same goes for their baseline table (VGG16 60.85%, ResNet50 71.39%, InceptionV3 84.94%, fine-tuned Xception 88.8%), which is all on that 12-class subset. Those baselines carry a further problem the paper is upfront about: they come from a re-split protocol where the test data was drawn from the training distribution, so they can't be compared to each other either, never mind to me.
+
+I nearly wrote this paragraph as though my 85% sat respectably among those numbers. It doesn't, because they aren't measuring the same thing. Two details make that clearer. A 12-class problem is substantially easier than a 37-class one, so their VGG16 and ResNet50 baselines were solving something simpler and still landed well below my number, which should make me suspicious of those baselines before it makes me pleased with mine. And their model trains with rotation, horizontal flip, and brightness augmentation, which I use none of.
+
+The honest position is that I have no comparable figure at all, because I haven't run my test set. That's the gap, and no amount of quoting other people's numbers fills it.
 
 ## Limitations
 
 - No seed is set, so runs aren't reproducible. Two runs of the same code gave 85.3% and 87.1%.
-- The validation set is 380 images across 37 classes, about 10 per class. Too small to measure anything under roughly 2 points.
-- The test set has never been run. There's no number here comparable to published results.
+- The validation set is 380 images across 37 classes, about 10 per class. At that size the 95% interval is ±3.6 points, so any improvement smaller than that is invisible here.
+- The test set has never been run, so every number here is a validation number. Published results I found are on the 12-breed cat subset, so even after running the test set I'd need a 37-class source to compare against.
 - No per-class accuracy, so I don't know which breeds fail. With 37 fine-grained classes, some are certainly far worse than the average, and the average hides that.
 - No augmentation, and I don't log training accuracy, so the gap between train and validation is unmeasured. I can't actually confirm or rule out overfitting.
 
 ## Next steps
 
 - Set a seed, so two runs mean something when compared.
-- Move to an 80/20 split, giving about 736 validation images and roughly a 1.3 point error bar instead of 2.
+- Move to an 80/20 split, giving about 736 validation images. That takes the standard error from 1.8 down to 1.3 points, so the 95% interval narrows from ±3.6 to ±2.6. Better, though still not enough to see a one-point gain.
+- Record per-image correctness on the validation set, so two runs can be compared with McNemar's test instead of by eyeballing two accuracy numbers.
 - Unfreeze `layer4` at a low learning rate (1e-4) while `fc` keeps training at 0.01. The last block holds the most task-specific features, and this is usually the largest single gain available from a setup like this.
 - Add `RandomHorizontalFlip` and `RandomResizedCrop`, to the training transform only. Augmenting validation would make the number noisier and mean something different each epoch.
 - Try Adam at lr 0.001 instead of SGD.
