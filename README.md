@@ -69,7 +69,7 @@ What the workers actually do is prepare batches: open the JPEG, decode it, resiz
 
 `torch.no_grad()` is a separate switch and it's easy to conflate the two. `eval()` changes what layers do. `no_grad()` turns off gradient bookkeeping. You want both during validation, for different reasons.
 
-**Device is `mps` if available.** On my previous project (32x32 images, 62k parameters) moving to the GPU wasn't worth it, because the CPU spent all its time decoding files while the arithmetic itself was trivial. Here it's 49 times the pixels and 190 times the parameters, so there's finally enough work to keep the GPU busy between transfers.
+**Device is `mps` if available.** On my previous project (32x32 images, 61,326 parameters) moving to the GPU wasn't worth it, because the CPU spent all its time decoding files while the arithmetic itself was trivial. Here it's 49 times the pixels and about 180 times the parameters, so there's finally enough work to keep the GPU busy between transfers.
 
 ## Results
 
@@ -82,15 +82,17 @@ Validation accuracy, percent, over 5 epochs. Two runs of identical code with ide
 
 This is the part of the project I found most interesting, and it wasn't what I set out to look at.
 
-Nothing differs between these two runs except the random initialisation of `fc` and the order the shuffled batches came in. I never set a seed. Yet they end 1.8 points apart, and more importantly they have completely different *shapes*. Run 1 looks like a textbook overfitting curve: peaks at epoch 1, then declines and flattens. Run 2 looks like it's still improving at epoch 4 and would benefit from more training. Either run on its own would support a confident conclusion, and one of those conclusions has to be wrong.
+Nothing differs between these two runs except the random initialisation of `fc` and the order the shuffled batches came in. The train/val split is seeded, so both runs saw exactly the same 380 validation images, but I never seeded anything else. Yet they end 1.8 points apart, and more importantly they have completely different *shapes*. Run 1 looks like a textbook overfitting curve: peaks at epoch 1, then declines and flattens. Run 2 looks like it's still improving at epoch 4 and would benefit from more training. Either run on its own would support a confident conclusion, and one of those conclusions has to be wrong.
 
 The dip in run 1 is 1.3 points, which on a 380-image validation set works out to about five images changing their minds. Five images is a small enough difference that I doubt anything real is happening there, even though the curve looks like it is.
 
 With 380 validation images the standard error on an accuracy near 85% is `sqrt(0.85 * 0.15 / 380)` = 1.8 percentage points. I want to be careful about that number, because one standard error is only about a 68% interval, and quoting it as though it were the threshold for a real result is exactly the mistake this section is warning about. The 95% interval is roughly twice as wide, ±3.6 points, and that's the figure to use when deciding whether a change did anything.
 
-So the 1.8 point gap between my two runs is one standard error. It's inside the range I'd get from reshuffling alone, and it would be wrong to read it as one run being better.
+So the 1.8 point gap between my two runs is about one standard error, comfortably inside what reshuffling alone could produce. I have no grounds to call either run better.
 
-One more caveat on that interval. ±3.6 is the uncertainty on a single accuracy against the true value. Comparing my two runs is a paired comparison, since both were scored on the same 380 images, and the correct test is McNemar's, which needs the count of images the two runs disagreed on. I didn't record that, so I can't run it. The paired test would give a tighter bound than the unpaired one, so ±3.6 is the conservative answer rather than the exact one.
+One more caveat on that interval. ±3.6 is the uncertainty on a single accuracy against the true value. Comparing my two runs is a paired comparison, since both were scored on the same 380 images, and the correct test is McNemar's, which needs the count of images the two runs disagreed on. I didn't record that, so I can't run it.
+
+That matters more than it first looks. The paired test would give a tighter bound than the unpaired one, and a tighter bound could in principle make 1.8 points significant. So ±3.6 doesn't show the two runs are equivalent. It shows I don't have the evidence to separate them, which is a weaker and less satisfying claim. My conclusion above should be read as "I can't tell" instead of "there's no difference", and the fix is recording which images each run got wrong.
 
 For rough context, a 2026 paper (arXiv 2602.07534, Hera et al., "Fine-Grained Cat Breed Recognition with Global Context Vision Transformer", ICCIT 2025) reports 92.00% test accuracy with a GCViT-Tiny on this dataset. Their task is only the 12 cat breeds though, so it's a 12-way problem and my 37-way number doesn't line up against it. The same goes for their baseline table (VGG16 60.85%, ResNet50 71.39%, InceptionV3 84.94%, fine-tuned Xception 88.8%), which is all on that 12-class subset. Those baselines carry a further problem the paper is upfront about: they come from a re-split protocol where the test data was drawn from the training distribution, so they can't be compared to each other either, never mind to me.
 
@@ -100,7 +102,7 @@ The honest position is that I have no comparable figure at all, because I haven'
 
 ## Limitations
 
-- No seed is set, so runs aren't reproducible. Two runs of the same code gave 85.3% and 87.1%.
+- No global seed. Only the train/val split is seeded, so weight initialisation and shuffle order still vary between runs, and two runs of the same code gave 85.3% and 87.1%.
 - The validation set is 380 images across 37 classes, about 10 per class. At that size the 95% interval is ±3.6 points, so any improvement smaller than that is invisible here.
 - The test set has never been run, so every number here is a validation number. Published results I found are on the 12-breed cat subset, so even after running the test set I'd need a 37-class source to compare against.
 - No per-class accuracy, so I don't know which breeds fail. With 37 fine-grained classes, some are certainly far worse than the average, and the average hides that.
@@ -108,7 +110,7 @@ The honest position is that I have no comparable figure at all, because I haven'
 
 ## Next steps
 
-- Set a seed, so two runs mean something when compared.
+- Set a global seed, covering weight init and shuffle order, so two runs mean something when compared.
 - Move to an 80/20 split, giving about 736 validation images. That takes the standard error from 1.8 down to 1.3 points, so the 95% interval narrows from ±3.6 to ±2.6. Better, though still not enough to see a one-point gain.
 - Record per-image correctness on the validation set, so two runs can be compared with McNemar's test instead of by eyeballing two accuracy numbers.
 - Unfreeze `layer4` at a low learning rate (1e-4) while `fc` keeps training at 0.01. The last block holds the most task-specific features, and this is usually the largest single gain available from a setup like this.
