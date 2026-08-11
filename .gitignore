@@ -1,0 +1,19 @@
+# Virtual environment
+.venv/
+
+# Dataset (downloaded automatically by torchvision on first run)
+data/
+
+# Model checkpoints
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE
+.idea/
+
+# macOS
+.DS_Store
