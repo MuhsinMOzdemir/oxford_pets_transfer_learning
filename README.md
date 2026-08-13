@@ -100,12 +100,46 @@ I nearly wrote this paragraph as though my 85% sat respectably among those numbe
 
 The honest position is that I have no comparable figure at all, because I haven't run my test set. That's the gap, and no amount of quoting other people's numbers fills it.
 
+## Per-breed accuracy
+
+The two runs above only ever produced one number each, which averages 37 breeds together and hides everything interesting. So the validation loop now keeps a hit count and an appearance count per class and prints accuracy for every breed at the final epoch. This table is from a separate run, made after that counter existed:
+
+The 20 breeds that lost at least one image, worst first:
+
+| breed | % | breed | % |
+|---|---|---|---|
+| Beagle | 37.5 | Russian Blue | 77.8 |
+| American Pit Bull Terrier | 44.4 | English Cocker Spaniel | 80.0 |
+| Chihuahua | 57.1 | Staffordshire Bull Terrier | 81.8 |
+| Abyssinian | 62.5 | Newfoundland | 85.7 |
+| German Shorthaired | 62.5 | Keeshond | 88.9 |
+| American Bulldog | 66.7 | Basset Hound | 90.9 |
+| Birman | 66.7 | Wheaten Terrier | 90.9 |
+| Boxer | 70.0 | Great Pyrenees | 91.7 |
+| Persian | 70.0 | Saint Bernard | 92.3 |
+| Maine Coon | 72.7 | | |
+| Ragdoll | 76.9 | | |
+
+The other 17 were perfect: Bengal, Bombay, British Shorthair, Egyptian Mau, English Setter, Havanese, Japanese Chin, Leonberger, Miniature Pinscher, Pomeranian, Pug, Samoyed, Scottish Terrier, Shiba Inu, Siamese, Sphynx, Yorkshire Terrier.
+
+Nearly half the breeds are perfect and the bottom five are under 67%, which is a much wider spread than a single 85% suggests.
+
+The failures cluster among lookalikes. American Pit Bull Terrier at 44.4%, Chihuahua at 57.1%, German Shorthaired at 62.5%, American Bulldog at 66.7%, Birman at 66.7%. These aren't scattered — Pit Bull, American Bulldog, Staffordshire Bull Terrier and Boxer share a body plan: short coat, broad skull, muscular build, overlapping size and colour. Pit Bull and Staffordshire Bull Terrier are so similar that the distinction is legally contested in several countries and shelters routinely disagree on it. A model with 512 general-purpose features and about 90 training images per breed has no chance at a distinction humans dispute.
+
+Same story on the cat side: Birman at 66.7% and Ragdoll at 76.9% are two of the three long-haired colourpoint breeds in the set, and they look almost identical apart from paw markings.
+
+The perfect scores share a property too. Pug, Sphynx, Samoyed, Shiba Inu, Pomeranian, Bengal, Egyptian Mau, Miniature Pinscher — each has a distinctive silhouette or coat and no close neighbour among the other 36. So the real structure isn't "some breeds are hard," it's breeds with a lookalike in the dataset are hard, breeds without one aren't.
+
+Beagle at 37.5% is the outlier I can't explain. It has no obvious twin in the set, and it's the lowest score in the table. Most likely it's small-sample noise — with roughly 8 images, that's 3 correct out of 8, and a single image is 12.5 points.
+
+Two caveats. I don't have a confusion matrix, so the lookalike explanation is a hypothesis rather than a measurement — I know Pit Bull is 44%, not what the other 56% got called. And with 380 validation images across 37 classes, each breed has only 8–13 images, so individual rankings are noisy even if the grouping isn't.
+
 ## Limitations
 
 - No global seed. Only the train/val split is seeded, so weight initialisation and shuffle order still vary between runs, and two runs of the same code gave 85.3% and 87.1%.
 - The validation set is 380 images across 37 classes, about 10 per class. At that size the 95% interval is ±3.6 points, so any improvement smaller than that is invisible here.
 - The test set has never been run, so every number here is a validation number. Published results I found are on the 12-breed cat subset, so even after running the test set I'd need a 37-class source to compare against.
-- No per-class accuracy, so I don't know which breeds fail. With 37 fine-grained classes, some are certainly far worse than the average, and the average hides that.
+- No confusion matrix. Per-breed accuracy tells me which breeds fail but not what they get mistaken for, so the lookalike explanation above is untested. Each breed also has only 8–13 validation images, so a single image moves a breed by more than 8 points.
 - No augmentation, and I don't log training accuracy, so the gap between train and validation is unmeasured. I can't actually confirm or rule out overfitting.
 
 ## Next steps
@@ -113,6 +147,7 @@ The honest position is that I have no comparable figure at all, because I haven'
 - Set a global seed, covering weight init and shuffle order, so two runs mean something when compared.
 - Move to an 80/20 split, giving about 736 validation images. That takes the standard error from 1.8 down to 1.3 points, so the 95% interval narrows from ±3.6 to ±2.6. Better, though still not enough to see a one-point gain.
 - Record per-image correctness on the validation set, so two runs can be compared with McNemar's test instead of by eyeballing two accuracy numbers.
+- Log a confusion matrix, not just per-breed accuracy. It's the same loop with a `[37, 37]` counter instead of two `[37]` ones, and it's what turns the lookalike story into a measurement.
 - Unfreeze `layer4` at a low learning rate (1e-4) while `fc` keeps training at 0.01. The last block holds the most task-specific features, and this is usually the largest single gain available from a setup like this.
 - Add `RandomHorizontalFlip` and `RandomResizedCrop`, to the training transform only. Augmenting validation would make the number noisier and mean something different each epoch.
 - Try Adam at lr 0.001 instead of SGD.
