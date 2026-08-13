@@ -101,10 +101,20 @@ if __name__ == "__main__":
             optimizer.step()
         net.eval() # Turn the model into evaluation mode
         correct = total = 0
+        class_correct = [0] * 37 # Creating a class with 37 0s to count the correct amount for each breed
+        class_total = [0] * 37 # Creating a class with 37 0s to count how many times each breed was shown
         with torch.no_grad():
             for images, labels in val_loader:
                 images, labels = images.to(device), labels.to(device)
                 predicted = net(images).argmax(1)
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
+                for label, pred in zip(labels, predicted): # Counting each breed amount
+                    class_total[label] += 1
+                    if label == pred:
+                        class_correct[label] += 1
         print(epoch, 100 * correct / total)
+        if epoch == 4:
+            for i in range(37):
+                if class_total[i] > 0:
+                    print(train_set.classes[i], round(100 * class_correct[i] / class_total[i], 1))
